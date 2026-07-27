@@ -1,5 +1,7 @@
+import os
 from typing import List, Dict, Any, Optional
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+from fastmcp.server.auth import StaticTokenVerifier
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -15,8 +17,16 @@ from whatsapp import (
     download_media as whatsapp_download_media
 )
 
+MCP_SHARED_SECRET = os.getenv("MCP_SHARED_SECRET")
+
+auth = None
+if MCP_SHARED_SECRET:
+    auth = StaticTokenVerifier(
+        tokens={MCP_SHARED_SECRET: {"client_id": "mcp-client", "scopes": []}}
+    )
+
 # Initialize FastMCP server
-mcp = FastMCP("whatsapp")
+mcp = FastMCP("whatsapp", auth=auth)
 
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
@@ -246,6 +256,46 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
             "message": "Failed to download media"
         }
 
+def _build_sse_app():
+    """Mount FastMCP behind FastAPI, translating ?token= into an Authorization header.
+
+    Standard SSE clients (Claude Desktop, Cursor) can't always send custom headers,
+    so they pass the shared secret as a query parameter instead. This middleware
+    rewrites it into the `Authorization: Bearer <token>` header FastMCP's native
+    StaticTokenVerifier expects, before the request reaches FastMCP's auth handler.
+    """
+    from urllib.parse import parse_qs
+    from fastapi import FastAPI
+    from starlette.datastructures import MutableHeaders
+
+    mcp_app = mcp.http_app(transport="sse")
+
+    class TokenQueryParamMiddleware:
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                headers = MutableHeaders(scope=scope)
+                if "authorization" not in headers:
+                    query_string = scope.get("query_string", b"").decode()
+                    token = parse_qs(query_string).get("token", [None])[0]
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
+            await self.app(scope, receive, send)
+
+    app = FastAPI(lifespan=mcp_app.lifespan)
+    app.add_middleware(TokenQueryParamMiddleware)
+    app.mount("/mcp", mcp_app)
+    return app
+
+
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run(transport='stdio')
+    transport = os.getenv("MCP_TRANSPORT", "stdio")
+    if transport == "sse":
+        import uvicorn
+
+        port = int(os.getenv("PORT", "8000"))
+        uvicorn.run(_build_sse_app(), host="0.0.0.0", port=port)
+    else:
+        mcp.run(transport="stdio")

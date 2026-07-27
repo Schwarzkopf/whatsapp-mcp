@@ -1,0 +1,6 @@
+.git
+**/.venv
+**/__pycache__
+**/*.pyc
+whatsapp-bridge/store
+implementation_plan.md
