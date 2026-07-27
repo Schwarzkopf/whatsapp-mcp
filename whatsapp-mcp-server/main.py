@@ -263,26 +263,63 @@ def _build_sse_app():
     so they pass the shared secret as a query parameter instead. This middleware
     rewrites it into the `Authorization: Bearer <token>` header FastMCP's native
     StaticTokenVerifier expects, before the request reaches FastMCP's auth handler.
+
+    The SSE handshake also returns an `endpoint` event telling the client where to
+    POST subsequent JSON-RPC messages (e.g. `/mcp/messages/?session_id=...`), and
+    that URL has no token on it. Clients don't reattach the original query token to
+    it, so those POSTs would otherwise arrive unauthenticated and get rejected with
+    401, killing the session. We rewrite that event on the way out to include the
+    token too.
     """
+    import re
     from urllib.parse import parse_qs
     from fastapi import FastAPI
     from starlette.datastructures import MutableHeaders
 
     mcp_app = mcp.http_app(transport="sse")
 
+    endpoint_event_re = re.compile(rb"event: endpoint\r?\ndata: (\S+)")
+
+    def _add_token_to_endpoint_event(body: bytes, token: str) -> bytes:
+        token_bytes = token.encode()
+
+        def repl(match: "re.Match[bytes]") -> bytes:
+            url = match.group(1)
+            sep = b"&" if b"?" in url else b"?"
+            return b"event: endpoint\ndata: " + url + sep + b"token=" + token_bytes
+
+        return endpoint_event_re.sub(repl, body)
+
     class TokenQueryParamMiddleware:
         def __init__(self, app):
             self.app = app
 
         async def __call__(self, scope, receive, send):
-            if scope["type"] == "http":
-                headers = MutableHeaders(scope=scope)
-                if "authorization" not in headers:
-                    query_string = scope.get("query_string", b"").decode()
-                    token = parse_qs(query_string).get("token", [None])[0]
-                    if token:
-                        headers["Authorization"] = f"Bearer {token}"
-            await self.app(scope, receive, send)
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+
+            headers = MutableHeaders(scope=scope)
+            token = None
+            if "authorization" not in headers:
+                query_string = scope.get("query_string", b"").decode()
+                token = parse_qs(query_string).get("token", [None])[0]
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+
+            if not token:
+                await self.app(scope, receive, send)
+                return
+
+            async def send_wrapper(message):
+                if message["type"] == "http.response.body" and message.get("body"):
+                    message = {
+                        **message,
+                        "body": _add_token_to_endpoint_event(message["body"], token),
+                    }
+                await send(message)
+
+            await self.app(scope, receive, send_wrapper)
 
     app = FastAPI(lifespan=mcp_app.lifespan)
     app.add_middleware(TokenQueryParamMiddleware)
