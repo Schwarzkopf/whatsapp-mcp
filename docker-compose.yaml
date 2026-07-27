@@ -1,8 +1,8 @@
 services:
   whatsapp-mcp:
     build: .
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       MCP_TRANSPORT: sse
       PORT: "8000"
