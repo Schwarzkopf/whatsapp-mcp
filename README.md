@@ -169,14 +169,14 @@ By default, just the metadata of the media is stored in the local database. The 
 
 ## Running as a Container
 
-In addition to running the bridge and MCP server directly on your machine, you can run the whole stack (Go bridge + Python MCP server) in a single container, exposed over HTTP/SSE with token authentication. This is useful for deploying the server somewhere remote (e.g. Coolify) instead of running it locally next to Claude Desktop.
+In addition to running the bridge and MCP server directly on your machine, you can run the whole stack (Go bridge + Python MCP server) in a single container, exposed over Streamable HTTP with token authentication. This is useful for deploying the server somewhere remote (e.g. Coolify) instead of running it locally next to Claude Desktop.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MCP_TRANSPORT` | `stdio` | Set to `sse` to run the FastAPI/HTTP server instead of stdio. The Docker image sets this to `sse` by default. |
-| `PORT` | `8000` | Port the FastAPI server listens on when `MCP_TRANSPORT=sse`. |
+| `MCP_TRANSPORT` | `stdio` | Set to `http` to run the FastAPI/Streamable HTTP server instead of stdio. The Docker image sets this to `http` by default. |
+| `PORT` | `8000` | Port the FastAPI server listens on when `MCP_TRANSPORT=http`. |
 | `MCP_SHARED_SECRET` | _(none)_ | Shared secret token clients must present to authenticate. If unset, the server runs with **no authentication** — only safe for strictly local use. |
 | `MESSAGES_DB_PATH` | `whatsapp-bridge/store/messages.db` (relative) | Path to the SQLite database written by the Go bridge. |
 | `WHATSAPP_API_BASE_URL` | `http://localhost:8080/api` | Base URL of the Go bridge's REST API. |
@@ -219,26 +219,26 @@ docker compose logs -f
 ### Deploying on Coolify
 
 1. Add a new service in Coolify pointing at this Git repository (it will detect the `Dockerfile` automatically).
-2. Set the environment variables `MCP_TRANSPORT=sse` and `MCP_SHARED_SECRET=your_secure_token` in Coolify's environment settings.
+2. Set the environment variables `MCP_TRANSPORT=http` and `MCP_SHARED_SECRET=your_secure_token` in Coolify's environment settings.
 3. Attach a persistent volume mounted at `/app/whatsapp-bridge/store` so your WhatsApp session survives redeploys.
 4. Deploy, then open the container logs/terminal in Coolify to scan the WhatsApp QR code.
-5. Once Coolify has issued HTTPS for your domain, the MCP server is reachable at `https://your-domain.com/mcp/sse`.
+5. Once Coolify has issued HTTPS for your domain, the MCP server is reachable at `https://your-domain.com/mcp`.
 
 ### Connecting Claude Desktop / Cursor over HTTPS
 
-Standard SSE clients don't always support sending custom headers, so the shared secret is passed as a `token` query parameter — the server maps it internally to the `Authorization: Bearer` header FastMCP's token verifier expects.
+Standard MCP clients don't always support sending custom headers on connect, so the shared secret is passed as a `token` query parameter — the server maps it internally to the `Authorization: Bearer` header FastMCP's token verifier expects.
 
 Point your MCP client at:
 
 ```
-https://your-domain.com/mcp/sse?token=your_secure_token
+https://your-domain.com/mcp?token=your_secure_token
 ```
 
 You can sanity-check the deployment with curl:
 
 ```bash
-curl -I https://your-domain.com/mcp/sse                       # -> 401 Unauthorized
-curl -I "https://your-domain.com/mcp/sse?token=your_secure_token"  # -> 200 OK
+curl -I https://your-domain.com/mcp                       # -> 401 Unauthorized
+curl -I "https://your-domain.com/mcp?token=your_secure_token"  # -> 200 OK
 ```
 
 ## Troubleshooting

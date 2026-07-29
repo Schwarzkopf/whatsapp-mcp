@@ -33,7 +33,7 @@ WORKDIR /app
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-ENV MCP_TRANSPORT=sse
+ENV MCP_TRANSPORT=http
 ENV PORT=8000
 ENV MESSAGES_DB_PATH=/app/whatsapp-bridge/store/messages.db
 ENV WHATSAPP_API_BASE_URL=http://localhost:8080/api

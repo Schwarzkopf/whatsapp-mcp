@@ -256,39 +256,23 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
             "message": "Failed to download media"
         }
 
-def _build_sse_app():
+def _build_http_app():
     """Mount FastMCP behind FastAPI, translating ?token= into an Authorization header.
 
-    Standard SSE clients (Claude Desktop, Cursor) can't always send custom headers,
+    Standard MCP clients can't always send custom headers on the initial connect,
     so they pass the shared secret as a query parameter instead. This middleware
     rewrites it into the `Authorization: Bearer <token>` header FastMCP's native
     StaticTokenVerifier expects, before the request reaches FastMCP's auth handler.
 
-    The SSE handshake also returns an `endpoint` event telling the client where to
-    POST subsequent JSON-RPC messages (e.g. `/mcp/messages/?session_id=...`), and
-    that URL has no token on it. Clients don't reattach the original query token to
-    it, so those POSTs would otherwise arrive unauthenticated and get rejected with
-    401, killing the session. We rewrite that event on the way out to include the
-    token too.
+    Streamable HTTP (unlike the legacy HTTP+SSE transport) uses a single `/mcp`
+    URL for every request - the client resends the query string on each call, so
+    no separate endpoint-URL rewriting is needed here.
     """
-    import re
     from urllib.parse import parse_qs
     from fastapi import FastAPI
     from starlette.datastructures import MutableHeaders
 
-    mcp_app = mcp.http_app(transport="sse")
-
-    endpoint_event_re = re.compile(rb"event: endpoint\r?\ndata: (\S+)")
-
-    def _add_token_to_endpoint_event(body: bytes, token: str) -> bytes:
-        token_bytes = token.encode()
-
-        def repl(match: "re.Match[bytes]") -> bytes:
-            url = match.group(1)
-            sep = b"&" if b"?" in url else b"?"
-            return b"event: endpoint\ndata: " + url + sep + b"token=" + token_bytes
-
-        return endpoint_event_re.sub(repl, body)
+    mcp_app = mcp.http_app(transport="http")
 
     class TokenQueryParamMiddleware:
         def __init__(self, app):
@@ -300,39 +284,31 @@ def _build_sse_app():
                 return
 
             headers = MutableHeaders(scope=scope)
-            token = None
             if "authorization" not in headers:
                 query_string = scope.get("query_string", b"").decode()
                 token = parse_qs(query_string).get("token", [None])[0]
                 if token:
                     headers["Authorization"] = f"Bearer {token}"
 
-            if not token:
-                await self.app(scope, receive, send)
-                return
+            await self.app(scope, receive, send)
 
-            async def send_wrapper(message):
-                if message["type"] == "http.response.body" and message.get("body"):
-                    message = {
-                        **message,
-                        "body": _add_token_to_endpoint_event(message["body"], token),
-                    }
-                await send(message)
-
-            await self.app(scope, receive, send_wrapper)
-
-    app = FastAPI(lifespan=mcp_app.lifespan)
+    app = FastAPI(
+        lifespan=mcp_app.lifespan,
+        openapi_url=None,
+        docs_url=None,
+        redoc_url=None,
+    )
     app.add_middleware(TokenQueryParamMiddleware)
-    app.mount("/mcp", mcp_app)
+    app.mount("/", mcp_app)
     return app
 
 
 if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio")
-    if transport == "sse":
+    if transport == "http":
         import uvicorn
 
         port = int(os.getenv("PORT", "8000"))
-        uvicorn.run(_build_sse_app(), host="0.0.0.0", port=port)
+        uvicorn.run(_build_http_app(), host="0.0.0.0", port=port)
     else:
         mcp.run(transport="stdio")

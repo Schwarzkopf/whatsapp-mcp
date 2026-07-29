@@ -4,7 +4,7 @@ services:
     expose:
       - "8000"
     environment:
-      MCP_TRANSPORT: sse
+      MCP_TRANSPORT: http
       PORT: "8000"
       MCP_SHARED_SECRET: ${MCP_SHARED_SECRET:?set MCP_SHARED_SECRET in your .env file}
     volumes:
